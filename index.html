@@ -935,6 +935,10 @@ body{background:var(--bg);color:var(--t1);font-family:var(--sn);font-size:14px;m
     <div class="modal-t" id="inv-modal-title">투자 항목 추가</div>
     <input type="hidden" id="ivm-id">
     <div class="fg"><label class="fl">항목명</label><input class="fi" type="text" id="ivm-name" placeholder="예: S&P500 ETF, CMA 비상금"></div>
+    <div class="fg" id="ivm-date-wrap">
+      <label class="fl">매입일자 <span style="font-size:10px;color:var(--t3)">(선택)</span></label>
+      <input class="fi" type="date" id="ivm-date">
+    </div>
     <div class="fr mb12">
       <div class="fg" style="margin:0"><label class="fl">종류</label>
         <select class="fi" id="ivm-type" onchange="toggleInvTicker(this.value)">
@@ -2219,57 +2223,48 @@ function renderInv(){
   var typeL={etf:'ETF',savings:'비상금',stock:'주식',fund:'펀드',other:'기타'};
 
   // 티커별 그룹화
-  var groups={};   // ticker → [items]
+  var groups={};
   var noTicker=[];
   items.forEach(function(inv){
-    if(inv.ticker){
-      if(!groups[inv.ticker]) groups[inv.ticker]=[];
-      groups[inv.ticker].push(inv);
-    } else {
-      noTicker.push(inv);
-    }
+    if(inv.ticker){ if(!groups[inv.ticker]) groups[inv.ticker]=[]; groups[inv.ticker].push(inv); }
+    else noTicker.push(inv);
   });
 
   var total=0;
   var html='<table class="tbl"><thead><tr>'
-    +'<th>항목</th><th>종류</th><th>명의</th>'
-    +'<th class="num">수량</th><th class="num">월납입</th><th class="num">평가액</th><th></th>'
-    +'</tr></thead><tbody>';
+    +sh('inv-body','name','항목')+sh('inv-body','type','종류')+sh('inv-body','person','명의')
+    +sh('inv-body','qty','수량')+sh('inv-body','monthly','월납입')+sh('inv-body','val','평가액')+'<th></th>'
+    +'</tr></thead><tbody id="inv-body">';
 
-  // 그룹화된 티커 항목
   Object.keys(groups).forEach(function(ticker){
     var grp=groups[ticker];
-    var isKRW = grp[0].currency!=='USD';
-    var sp=stockPrices[ticker]&&stockPrices[ticker].price ? stockPrices[ticker].price : 0;
-
-    // 그룹 합산
+    var isKRW=grp[0].currency!=='USD';
+    var sp=stockPrices[ticker]&&stockPrices[ticker].price?stockPrices[ticker].price:0;
     var totalQty=grp.reduce(function(s,i){return s+(i.qty||0);},0);
     var totalMonthly=grp.reduce(function(s,i){return s+(i.monthly||0);},0);
     var curPrice=sp||(grp[0].pricePerUnit||0);
     var totalVal=totalQty*curPrice*(isKRW?1:rate);
     if(!totalVal) totalVal=grp.reduce(function(s,i){return s+(isKRW?(i.balance||0):(i.balance||0)*rate);},0);
     total+=totalVal;
-
-    // 총 매입가 (손익용)
     var totalCost=grp.reduce(function(s,i){return s+(i.qty||0)*(i.pricePerUnit||0)*(isKRW?1:rate);},0);
-    var pl=sp&&totalCost ? totalVal-totalCost : 0;
-    var plPct=totalCost&&pl ? (pl/totalCost*100).toFixed(1) : 0;
+    var pl=sp&&totalCost?totalVal-totalCost:0;
+    var plPct=totalCost&&pl?(pl/totalCost*100).toFixed(1):0;
     var plColor=pl>0?'var(--gr)':pl<0?'var(--rd)':'var(--t3)';
     var plSign=pl>=0?'+':'';
-
     var priceStr=curPrice?(isKRW?fw(curPrice):'$'+curPrice.toFixed(2)):'미조회';
     var c=typeC[grp[0].type]||'var(--bl)';
     var tl=typeL[grp[0].type]||grp[0].type;
 
-    // 그룹이 1개면 단순 행
     if(grp.length===1){
       var inv=grp[0];
       var personTag='<span class="tag t-'+(inv.person==='both'?'dm':inv.person)+'">'+( inv.person==='mj'?'민정':inv.person==='jw'?'진우':'공동')+'</span>';
+      // 매입일 표시
+      var dateInfo=inv.date?'<div style="font-size:9px;color:var(--t3)">매입 '+inv.date+'</div>':'';
       html+='<tr>'
         +'<td><div style="font-weight:500">'+inv.name+'</div>'
         +'<div style="font-size:10px;color:var(--bl);margin-top:1px">'+ticker+' · '+totalQty+'주 · '+priceStr+'</div>'
         +(pl?'<div style="font-size:10px;color:'+plColor+'">'+plSign+fw(Math.round(pl))+' ('+plSign+plPct+'%)</div>':'')
-        +'</td>'
+        +dateInfo+'</td>'
         +'<td><span style="font-size:11px;color:'+c+'">'+tl+'</span></td>'
         +'<td>'+personTag+'</td>'
         +'<td class="num">'+totalQty+'주</td>'
@@ -2280,32 +2275,38 @@ function renderInv(){
         +'<button class="del" onclick="delInv(\''+inv.id+'\')">✕</button>'
         +'</td></tr>';
     } else {
-      // 그룹 헤더 행 (합산)
-      var expanded = (_invExpanded||{})[ticker];
+      // 그룹 헤더
+      var expanded=(_invExpanded||{})[ticker];
       html+='<tr style="background:var(--s2);cursor:pointer" onclick="toggleInvGroup(\''+ticker+'\')">'
         +'<td><div style="display:flex;align-items:center;gap:6px">'
-        +'<span style="font-size:10px;color:var(--t3)">'+(expanded?'▼':'▶')+'</span>'
+        +'<span style="font-size:11px;color:var(--t3)">'+(expanded?'▼':'▶')+'</span>'
         +'<div><div style="font-weight:600">'+ticker+'</div>'
-        +'<div style="font-size:10px;color:var(--bl)">'+grp.length+'개 계좌 · '+totalQty+'주 · '+priceStr+'</div>'
+        +'<div style="font-size:10px;color:var(--bl)">'+grp.length+'건 · 총 '+totalQty+'주 · '+priceStr+'</div>'
         +(pl?'<div style="font-size:10px;color:'+plColor+'">'+plSign+fw(Math.round(pl))+' ('+plSign+plPct+'%)</div>':'')
         +'</div></div></td>'
         +'<td><span style="font-size:11px;color:'+c+'">'+tl+'</span></td>'
-        +'<td><span style="font-size:10px;color:var(--t3)">'+grp.length+'명</span></td>'
+        +'<td><span style="font-size:10px;color:var(--t3)">'+grp.length+'건</span></td>'
         +'<td class="num" style="font-weight:600">'+totalQty+'주</td>'
         +'<td class="num">'+fw(totalMonthly)+'</td>'
         +'<td class="num" style="color:'+c+';font-weight:600">'+fw(Math.round(totalVal))+'</td>'
         +'<td></td></tr>';
 
-      // 하위 항목 (펼침 시)
+      // 하위 항목 (펼침) - 매입일·수량·단가 상세 표시
       if(expanded){
         grp.forEach(function(inv){
           var subVal=(inv.qty||0)*curPrice*(isKRW?1:rate)||( isKRW?(inv.balance||0):(inv.balance||0)*rate);
           var personTag='<span class="tag t-'+(inv.person==='both'?'dm':inv.person)+'">'+( inv.person==='mj'?'민정':inv.person==='jw'?'진우':'공동')+'</span>';
           var subCost=(inv.qty||0)*(inv.pricePerUnit||0)*(isKRW?1:rate);
           var subPl=sp&&subCost?subVal-subCost:0;
-          var subPlStr=subPl?('<div style="font-size:10px;color:'+(subPl>0?'var(--gr)':'var(--rd)')+'">'+( subPl>0?'+':'')+fw(Math.round(subPl))+'</div>'):'';
+          var unitPriceStr=inv.pricePerUnit?(isKRW?fw(inv.pricePerUnit)+'원':'$'+inv.pricePerUnit):'';
+          var dateStr=inv.date||'';
           html+='<tr style="background:var(--s3)">'
-            +'<td style="padding-left:28px"><div style="font-size:12px">'+inv.name+'</div>'+subPlStr+'</td>'
+            +'<td style="padding-left:28px">'
+            +'<div style="font-size:12px;font-weight:500">'+inv.name+'</div>'
+            +(dateStr?'<div style="font-size:10px;color:var(--t3)">📅 '+dateStr+'</div>':'')
+            +(unitPriceStr?'<div style="font-size:10px;color:var(--t2)">매입가 '+unitPriceStr+'/주</div>':'')
+            +(subPl?'<div style="font-size:10px;color:'+(subPl>0?'var(--gr)':'var(--rd)')+'">'+( subPl>0?'+':'')+fw(Math.round(subPl))+'</div>':'')
+            +'</td>'
             +'<td></td>'
             +'<td>'+personTag+'</td>'
             +'<td class="num" style="font-size:11px">'+(inv.qty||'—')+'주</td>'
@@ -2320,13 +2321,13 @@ function renderInv(){
     }
   });
 
-  // 티커 없는 항목 (비상금 등) - 잔액 기준 정렬
-  noTicker = sortItems(noTicker.map(function(inv){
+  // 티커 없는 항목
+  var sortedNoTicker=sortItems(noTicker.map(function(inv){
     var isKRW=inv.currency!=='USD'; inv._val=isKRW?(inv.balance||0):(inv.balance||0)*rate; return inv;
   }), 'inv-body');
-  noTicker.forEach(function(inv){
+  sortedNoTicker.forEach(function(inv){
     var isKRW=inv.currency!=='USD';
-    var val=isKRW?(inv.balance||0):(inv.balance||0)*rate;
+    var val=inv._val||0;
     total+=val;
     var c=typeC[inv.type]||'var(--t2)';
     var personTag='<span class="tag t-'+(inv.person==='both'?'dm':inv.person)+'">'+( inv.person==='mj'?'민정':inv.person==='jw'?'진우':'공동')+'</span>';
@@ -2347,9 +2348,15 @@ function renderInv(){
     +'<div class="hr"></div>'
     +'<div class="fb"><span style="font-size:12px;color:var(--t2)">합계</span>'
     +'<span style="font-family:var(--mn);font-weight:500;color:var(--gr)">'+fw(Math.round(total))+'</span></div>';
-  // tbody id 추가
-  el.innerHTML=html.replace('<tbody>','<tbody id="inv-body">');
+  el.innerHTML=html;
 }
+
+var _invExpanded={};
+function toggleInvGroup(ticker){
+  _invExpanded[ticker]=!_invExpanded[ticker];
+  renderInv();
+}
+
 
 var _invExpanded={};
 function toggleInvGroup(ticker){
@@ -2510,13 +2517,15 @@ function openInvModal(id){
     document.getElementById('ivm-person').value = inv.person||'mj';
     setAmtVal('ivm-monthly', inv.monthly||0);
     setAmtVal('ivm-balance', inv.balance||0);
+    document.getElementById('ivm-date').value = inv.date||'';
   } else {
-    ['ivm-name','ivm-ticker','ivm-qty','ivm-price'].forEach(function(k){
+    ['ivm-name','ivm-ticker','ivm-qty','ivm-price','ivm-date'].forEach(function(k){
       var el=document.getElementById(k); if(el) el.value='';
     });
     document.getElementById('ivm-type').value = 'etf';
     document.getElementById('ivm-currency').value = 'USD';
     document.getElementById('ivm-person').value = 'mj';
+    document.getElementById('ivm-date').value = todayKST();
     // 단가 라벨 초기화
     var pl=document.getElementById('ivm-price-label');
     if(pl) pl.textContent='매입 단가 (USD)';
@@ -2788,6 +2797,15 @@ var annualYear = 2026;
 var annualViewMode = 'bar';
 
 (function(){
+
+// 정렬 헤더 이벤트 위임 (iOS Safari 호환)
+document.addEventListener('click', function(e){
+  var th = e.target.closest('th[data-st]');
+  if(!th) return;
+  var tableId = th.getAttribute('data-st');
+  var col = th.getAttribute('data-sc');
+  if(tableId && col) sortTable(tableId, col);
+});
   loadDB(); // ← must run before ANY render call
   const lastPage = sessionStorage.getItem('jm_last_page') || 'home';
   const pages=['home','dash','txn','budget','income','fixed','asset','cf','annual','settle'];
@@ -5698,7 +5716,7 @@ function sh(tableId, col, label){
   var active=s&&s.col===col;
   var icon=active?(s.dir==='asc'?'↑':'↓'):'⇅';
   var color=active?(s.dir==='asc'?'var(--gr)':'var(--ac)'):'var(--t3)';
-  return '<th onclick="sortTable(\''+tableId+'\',\''+col+'\')" style="cursor:pointer;user-select:none">'
+  return '<th data-st="'+tableId+'" data-sc="'+col+'" style="cursor:pointer;user-select:none;-webkit-tap-highlight-color:transparent">'
     +label+' <span style="color:'+color+';font-size:10px">'+icon+'</span></th>';
 }
 
