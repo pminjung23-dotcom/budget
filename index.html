@@ -315,7 +315,7 @@ body{background:var(--bg);color:var(--t1);font-family:var(--sn);font-size:14px;m
 </nav>
 
 <!-- FAB (mobile floating add button) -->
-<button class="fab" onclick="openTxnModal()" title="지출 추가">＋</button>
+<button class="fab" id="fab-btn" onclick="fabAction()" title="추가">＋</button>
 
 <!-- More Sheet (mobile) -->
 <div id="more-sheet-ov" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:300;align-items:flex-end" onclick="if(event.target===this)closeMoreSheet()">
@@ -891,7 +891,7 @@ body{background:var(--bg);color:var(--t1);font-family:var(--sn);font-size:14px;m
     <div class="modal-t">수입 추가</div>
     <div class="fr mb12"><div class="fg" style="margin:0"><label class="fl">날짜</label><input class="fi" type="date" id="im-date"></div><div class="fg" style="margin:0"><label class="fl">누구</label><select class="fi" id="im-person"><option value="mj">민정</option><option value="jw">진우</option><option value="both">공동</option></select></div></div>
     <div class="fg"><label class="fl">항목명</label><input class="fi" type="text" id="im-name" placeholder="예: 4월 월급, 진우 여비, 성과급"></div>
-    <div class="fr mb12"><div class="fg" style="margin:0"><label class="fl">종류</label><select class="fi" id="im-type"><option value="salary">월급</option><option value="yebi">여비</option><option value="bonus">성과급/보너스</option><option value="other">기타수입</option></select></div><div class="fg" style="margin:0"><label class="fl">금액 (원)</label><input class="fi" type="number" id="im-amt" inputmode="numeric" placeholder="0"></div></div>
+    <div class="fr mb12"><div class="fg" style="margin:0"><label class="fl" style="font-size:10px;color:var(--t3)">종류 (선택)</label><select class="fi" id="im-type"><option value="salary">월급</option><option value="yebi">여비</option><option value="bonus">성과급/보너스</option><option value="other">기타수입</option></select></div><div class="fg" style="margin:0"><label class="fl">금액 (원)</label><input class="fi" type="number" id="im-amt" inputmode="numeric" placeholder="0"></div></div>
     <div class="fg"><label class="fl">메모</label><input class="fi" type="text" id="im-memo" placeholder="메모"></div>
     <div class="fb" style="margin-top:16px"><button class="btn btn-g" onclick="closeMo('income-modal')">취소</button><button class="btn btn-p" onclick="addIncome()">추가</button></div>
   </div>
@@ -1243,6 +1243,8 @@ function go(id){
   const pages=['home','dash','txn','budget','income','fixed','asset','cf','annual','settle'];
   const navs=document.querySelectorAll('.nv');
   navs[pages.indexOf(id)]?.classList.add('on');
+  // 월 표시 동기화
+  document.querySelectorAll('.mn-disp').forEach(function(e){e.textContent=curMo;});
   if(id==='dash')renderDash();
   if(id==='txn')renderTxn();
   if(id==='budget')renderBudgetPage();
@@ -1261,6 +1263,10 @@ function chMo(d){
   const dt=new Date(y,m-1+d,1);
   curMo=`${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}`;
   document.querySelectorAll('.mn-disp').forEach(e=>e.textContent=curMo);
+  // 다른 탭의 월 표시도 동기화
+  ['dash-mlabel','budget-mo-label','settle-label'].forEach(function(id){
+    var el=document.getElementById(id); if(el) el.textContent=curMo;
+  });
   ['dash-mlabel','budget-mo-label','settle-label'].forEach(id=>{
     const el=document.getElementById(id);
     if(el) el.textContent=id==='settle-label'?moLabel(curMo)+' 결산':moLabel(curMo);
@@ -1676,7 +1682,7 @@ function addIncome(){
   else { DB.income.push(item); }
   save();closeMo('income-modal');
   document.getElementById('income-modal').dataset.editId='';
-  document.querySelector('#income-modal .modal-t').textContent='수입 추가';
+  var _imt=document.querySelector('#income-modal .modal-t');if(_imt)_imt.textContent='수입 추가';
   ['im-name','im-amt','im-memo'].forEach(id=>document.getElementById(id).value='');
   renderIncome();
 }
@@ -1711,6 +1717,8 @@ function setAssetTab(id,el){
   if(id==='accounts') renderAccounts();
   if(id==='invest') renderInv();
   if(id==='pension') renderPension();
+  // 탭 전환 시 스크롤 탑
+  var tabEl2=document.getElementById('pg-asset'); if(tabEl2) tabEl2.scrollTop=0;
 }
 function renderAsset(){
   renderAssetPlan();renderESPP();renderESPPApiSetup();renderPension();renderInv();renderAssetMetrics();
@@ -2209,84 +2217,146 @@ function renderInv(){
   }
   var typeC={etf:'var(--bl)',savings:'var(--gr)',stock:'#c48aff',fund:'var(--or)',other:'var(--t2)'};
   var typeL={etf:'ETF',savings:'비상금',stock:'주식',fund:'펀드',other:'기타'};
-  var total=0;
 
-  var rows=items.map(function(inv){
-    var isKRW = inv.currency !== 'USD';
-    var curPrice = 0;
-    // 현재가: 실시간 조회 → 없으면 매입단가
+  // 티커별 그룹화
+  var groups={};   // ticker → [items]
+  var noTicker=[];
+  items.forEach(function(inv){
     if(inv.ticker){
-      var sp = stockPrices[inv.ticker];
-      curPrice = (sp&&sp.price) ? sp.price : (getCachedPrice&&getCachedPrice(inv.ticker)||0);
-    }
-
-    // 평가액 계산
-    var val = 0;
-    if(inv.ticker && inv.qty){
-      var priceForCalc = curPrice || inv.pricePerUnit || 0;
-      val = inv.qty * priceForCalc * (isKRW ? 1 : rate);
+      if(!groups[inv.ticker]) groups[inv.ticker]=[];
+      groups[inv.ticker].push(inv);
     } else {
-      val = isKRW ? (inv.balance||0) : (inv.balance||0)*rate;
+      noTicker.push(inv);
     }
-    if(val===0 && inv.balance) val = isKRW ? inv.balance : inv.balance*rate;
-    total += val;
+  });
 
-    // 손익 계산 (매입단가 있을 때만)
-    var plHtml = '';
-    if(inv.ticker && inv.qty && inv.pricePerUnit && curPrice){
-      var costKRW = inv.qty * inv.pricePerUnit * (isKRW ? 1 : rate);
-      var pl = val - costKRW;
-      var plPct = costKRW ? (pl/costKRW*100).toFixed(1) : 0;
-      var plColor = pl >= 0 ? 'var(--gr)' : 'var(--rd)';
-      var plSign = pl >= 0 ? '+' : '';
-      plHtml = '<div style="font-size:10px;color:'+plColor+';margin-top:1px">'
-        +plSign+fw(Math.round(pl))+' ('+plSign+plPct+'%)</div>';
+  var total=0;
+  var html='<table class="tbl"><thead><tr>'
+    +'<th>항목</th><th>종류</th><th>명의</th>'
+    +'<th class="num">수량</th><th class="num">월납입</th><th class="num">평가액</th><th></th>'
+    +'</tr></thead><tbody>';
+
+  // 그룹화된 티커 항목
+  Object.keys(groups).forEach(function(ticker){
+    var grp=groups[ticker];
+    var isKRW = grp[0].currency!=='USD';
+    var sp=stockPrices[ticker]&&stockPrices[ticker].price ? stockPrices[ticker].price : 0;
+
+    // 그룹 합산
+    var totalQty=grp.reduce(function(s,i){return s+(i.qty||0);},0);
+    var totalMonthly=grp.reduce(function(s,i){return s+(i.monthly||0);},0);
+    var curPrice=sp||(grp[0].pricePerUnit||0);
+    var totalVal=totalQty*curPrice*(isKRW?1:rate);
+    if(!totalVal) totalVal=grp.reduce(function(s,i){return s+(isKRW?(i.balance||0):(i.balance||0)*rate);},0);
+    total+=totalVal;
+
+    // 총 매입가 (손익용)
+    var totalCost=grp.reduce(function(s,i){return s+(i.qty||0)*(i.pricePerUnit||0)*(isKRW?1:rate);},0);
+    var pl=sp&&totalCost ? totalVal-totalCost : 0;
+    var plPct=totalCost&&pl ? (pl/totalCost*100).toFixed(1) : 0;
+    var plColor=pl>0?'var(--gr)':pl<0?'var(--rd)':'var(--t3)';
+    var plSign=pl>=0?'+':'';
+
+    var priceStr=curPrice?(isKRW?fw(curPrice):'$'+curPrice.toFixed(2)):'미조회';
+    var c=typeC[grp[0].type]||'var(--bl)';
+    var tl=typeL[grp[0].type]||grp[0].type;
+
+    // 그룹이 1개면 단순 행
+    if(grp.length===1){
+      var inv=grp[0];
+      var personTag='<span class="tag t-'+(inv.person==='both'?'dm':inv.person)+'">'+( inv.person==='mj'?'민정':inv.person==='jw'?'진우':'공동')+'</span>';
+      html+='<tr>'
+        +'<td><div style="font-weight:500">'+inv.name+'</div>'
+        +'<div style="font-size:10px;color:var(--bl);margin-top:1px">'+ticker+' · '+totalQty+'주 · '+priceStr+'</div>'
+        +(pl?'<div style="font-size:10px;color:'+plColor+'">'+plSign+fw(Math.round(pl))+' ('+plSign+plPct+'%)</div>':'')
+        +'</td>'
+        +'<td><span style="font-size:11px;color:'+c+'">'+tl+'</span></td>'
+        +'<td>'+personTag+'</td>'
+        +'<td class="num">'+totalQty+'주</td>'
+        +'<td class="num">'+fw(totalMonthly)+'</td>'
+        +'<td class="num" style="color:'+c+'">'+fw(Math.round(totalVal))+'</td>'
+        +'<td style="white-space:nowrap">'
+        +'<button class="del" style="margin-right:2px" onclick="openInvModal(\''+inv.id+'\')">✎</button>'
+        +'<button class="del" onclick="delInv(\''+inv.id+'\')">✕</button>'
+        +'</td></tr>';
+    } else {
+      // 그룹 헤더 행 (합산)
+      var expanded = (_invExpanded||{})[ticker];
+      html+='<tr style="background:var(--s2);cursor:pointer" onclick="toggleInvGroup(\''+ticker+'\')">'
+        +'<td><div style="display:flex;align-items:center;gap:6px">'
+        +'<span style="font-size:10px;color:var(--t3)">'+(expanded?'▼':'▶')+'</span>'
+        +'<div><div style="font-weight:600">'+ticker+'</div>'
+        +'<div style="font-size:10px;color:var(--bl)">'+grp.length+'개 계좌 · '+totalQty+'주 · '+priceStr+'</div>'
+        +(pl?'<div style="font-size:10px;color:'+plColor+'">'+plSign+fw(Math.round(pl))+' ('+plSign+plPct+'%)</div>':'')
+        +'</div></div></td>'
+        +'<td><span style="font-size:11px;color:'+c+'">'+tl+'</span></td>'
+        +'<td><span style="font-size:10px;color:var(--t3)">'+grp.length+'명</span></td>'
+        +'<td class="num" style="font-weight:600">'+totalQty+'주</td>'
+        +'<td class="num">'+fw(totalMonthly)+'</td>'
+        +'<td class="num" style="color:'+c+';font-weight:600">'+fw(Math.round(totalVal))+'</td>'
+        +'<td></td></tr>';
+
+      // 하위 항목 (펼침 시)
+      if(expanded){
+        grp.forEach(function(inv){
+          var subVal=(inv.qty||0)*curPrice*(isKRW?1:rate)||( isKRW?(inv.balance||0):(inv.balance||0)*rate);
+          var personTag='<span class="tag t-'+(inv.person==='both'?'dm':inv.person)+'">'+( inv.person==='mj'?'민정':inv.person==='jw'?'진우':'공동')+'</span>';
+          var subCost=(inv.qty||0)*(inv.pricePerUnit||0)*(isKRW?1:rate);
+          var subPl=sp&&subCost?subVal-subCost:0;
+          var subPlStr=subPl?('<div style="font-size:10px;color:'+(subPl>0?'var(--gr)':'var(--rd)')+'">'+( subPl>0?'+':'')+fw(Math.round(subPl))+'</div>'):'';
+          html+='<tr style="background:var(--s3)">'
+            +'<td style="padding-left:28px"><div style="font-size:12px">'+inv.name+'</div>'+subPlStr+'</td>'
+            +'<td></td>'
+            +'<td>'+personTag+'</td>'
+            +'<td class="num" style="font-size:11px">'+(inv.qty||'—')+'주</td>'
+            +'<td class="num" style="font-size:11px">'+fw(inv.monthly||0)+'</td>'
+            +'<td class="num" style="font-size:11px">'+fw(Math.round(subVal))+'</td>'
+            +'<td style="white-space:nowrap">'
+            +'<button class="del" style="margin-right:2px" onclick="event.stopPropagation();openInvModal(\''+inv.id+'\')">✎</button>'
+            +'<button class="del" onclick="event.stopPropagation();delInv(\''+inv.id+'\')">✕</button>'
+            +'</td></tr>';
+        });
+      }
     }
+  });
 
-    // 티커 정보 표시
-    var tickerHtml = '';
-    if(inv.ticker){
-      var dispPrice = curPrice || inv.pricePerUnit || 0;
-      var priceStr = dispPrice
-        ? (isKRW ? fw(dispPrice) : '$'+dispPrice.toFixed(2))
-        : '미조회';
-      var qtyStr = inv.qty ? inv.qty+'주' : '';
-      tickerHtml = '<div style="font-size:10px;color:var(--bl);margin-top:1px">'
-        +inv.ticker
-        +(qtyStr ? ' · '+qtyStr : '')
-        +' · '+priceStr
-        +(inv.pricePerUnit && !curPrice ? ' (매입단가)' : '')
-        +'</div>';
-    }
-
-    return '<tr>'
-      // 항목명 + 티커정보
-      +'<td><div style="font-weight:500">'+inv.name+'</div>'+tickerHtml+plHtml+'</td>'
-      // 종류
-      +'<td><span style="font-size:11px;color:'+(typeC[inv.type]||'var(--t2)')+'">'+( typeL[inv.type]||inv.type)+'</span></td>'
-      // 명의
-      +'<td><span class="tag t-'+(inv.person==='both'?'dm':inv.person)+'">'+( inv.person==='mj'?'민정':inv.person==='jw'?'진우':'공동')+'</span></td>'
-      // 수량
-      +'<td class="num" style="font-size:12px">'+(inv.qty ? inv.qty+'주' : '—')+'</td>'
-      // 월납입
+  // 티커 없는 항목 (비상금 등) - 잔액 기준 정렬
+  noTicker = sortItems(noTicker.map(function(inv){
+    var isKRW=inv.currency!=='USD'; inv._val=isKRW?(inv.balance||0):(inv.balance||0)*rate; return inv;
+  }), 'inv-body');
+  noTicker.forEach(function(inv){
+    var isKRW=inv.currency!=='USD';
+    var val=isKRW?(inv.balance||0):(inv.balance||0)*rate;
+    total+=val;
+    var c=typeC[inv.type]||'var(--t2)';
+    var personTag='<span class="tag t-'+(inv.person==='both'?'dm':inv.person)+'">'+( inv.person==='mj'?'민정':inv.person==='jw'?'진우':'공동')+'</span>';
+    html+='<tr>'
+      +'<td><div style="font-weight:500">'+inv.name+'</div></td>'
+      +'<td><span style="font-size:11px;color:'+c+'">'+( typeL[inv.type]||inv.type)+'</span></td>'
+      +'<td>'+personTag+'</td>'
+      +'<td class="num">—</td>'
       +'<td class="num">'+fw(inv.monthly||0)+'</td>'
-      // 평가액
-      +'<td class="num" style="color:'+(typeC[inv.type]||'var(--t1)')+'">'+fw(Math.round(val))+'</td>'
-      // 버튼
+      +'<td class="num" style="color:'+c+'">'+fw(Math.round(val))+'</td>'
       +'<td style="white-space:nowrap">'
       +'<button class="del" style="margin-right:2px" onclick="openInvModal(\''+inv.id+'\')">✎</button>'
       +'<button class="del" onclick="delInv(\''+inv.id+'\')">✕</button>'
       +'</td></tr>';
-  }).join('');
+  });
 
-  el.innerHTML='<table class="tbl"><thead><tr>'
-    +'<th>항목</th><th>종류</th><th>명의</th>'
-    +'<th class="num">수량</th><th class="num">월납입</th><th class="num">평가액</th><th></th>'
-    +'</tr></thead><tbody>'+rows+'</tbody></table>'
+  html+='</tbody></table>'
     +'<div class="hr"></div>'
     +'<div class="fb"><span style="font-size:12px;color:var(--t2)">합계</span>'
     +'<span style="font-family:var(--mn);font-weight:500;color:var(--gr)">'+fw(Math.round(total))+'</span></div>';
+  // tbody id 추가
+  el.innerHTML=html.replace('<tbody>','<tbody id="inv-body">');
 }
+
+var _invExpanded={};
+function toggleInvGroup(ticker){
+  _invExpanded[ticker]=!_invExpanded[ticker];
+  renderInv();
+}
+
 
 
 
@@ -2584,15 +2654,48 @@ function openTxnEditModal(id){
   document.getElementById('tm-1off').value = t.oneoff?'1':'0';
   modal.classList.add('on');
 }
+
+
+var _recentCats = [];
+function updateRecentCats(cat){
+  if(!cat) return;
+  _recentCats = [cat].concat(_recentCats.filter(function(c){return c!==cat;})).slice(0,3);
+  try{ localStorage.setItem('jm_recent_cats', JSON.stringify(_recentCats)); }catch(e){}
+}
+function loadRecentCats(){
+  try{
+    var saved = localStorage.getItem('jm_recent_cats');
+    if(saved) _recentCats = JSON.parse(saved);
+  }catch(e){}
+}
+function applyRecentCatToModal(){
+  loadRecentCats();
+  if(!_recentCats.length) return;
+  var sel = document.getElementById('tm-cat');
+  if(!sel) return;
+  // 최근 카테고리가 있으면 기본값으로 설정
+  var opts = Array.from(sel.options||[]).map(function(o){return o.value;});
+  if(opts.indexOf(_recentCats[0]) >= 0) sel.value = _recentCats[0];
+}
+
+function fabAction(){
+  var active = sessionStorage.getItem('jm_last_page')||'home';
+  if(active==='income') openIncomeModal();
+  else if(active==='asset') openInvModal();
+  else if(active==='fixed') openFixedModal();
+  else openTxnModal();
+}
+
 function openTxnModal(){
   const modal=document.getElementById('txn-modal');
   delete modal.dataset.editId;
-  document.querySelector('#txn-modal .modal-t').textContent='지출 추가';
+  var _mt=document.querySelector('#txn-modal .modal-t');if(_mt)_mt.textContent='지출 추가';
   document.getElementById('tm-date').value=todayKST();
   // 폼 초기화
   ['tm-name','tm-desc','tm-memo'].forEach(i=>{const el=document.getElementById(i);if(el)el.value='';});
   document.getElementById('tm-amt').value='';
   document.getElementById('tm-ref').value='0';
+  applyRecentCatToModal();
   modal.classList.add('on');
   setupAmtInput('tm-amt');
   setupAmtInput('tm-ref');
@@ -2622,7 +2725,7 @@ function addTxn(){
   }
   save();closeMo('txn-modal');
   document.getElementById('txn-modal').dataset.editId='';
-  document.querySelector('#txn-modal .modal-t').textContent='지출 추가';
+  var _mt=document.querySelector('#txn-modal .modal-t');if(_mt)_mt.textContent='지출 추가';
   ['tm-name','tm-desc','tm-amt','tm-ref','tm-memo'].forEach(id=>document.getElementById(id).value='');
   renderDash();renderTxn();
 }
@@ -2813,13 +2916,13 @@ function renderFixed(){
 
   el.innerHTML = '<table class="tbl">'
     + '<thead id="fixed-thead"><tr>'
-    + '<th>항목</th><th>명의</th><th>카테고리</th><th>납부일</th><th>D-day</th>'
+    + sh('fixed-body','name','항목')+sh('fixed-body','person','명의')+sh('fixed-body','cat','카테고리')+sh('fixed-body','day','납부일')+'<th>D-day</th>'
     + '<th class="num" style="font-size:10px;color:var(--t2)">'+prevLabel+' (전달)</th>'
     + '<th>이번달</th>'
     + '<th class="num">금액</th>'
     + '<th></th>'
     + '</tr></thead>'
-    + '<tbody>'+rows+'</tbody>'
+    + '<tbody id="fixed-body">'+rows+'</tbody>'
     + '</table>'
     + '<div style="margin-top:8px;font-size:10px;color:var(--t3)">💡 배지 클릭 → 납부완료 확정</div>';
 
@@ -2963,59 +3066,43 @@ function getActualPaid(fixedItem, ym){
 const ACCT_TYPES = {'입출금':'🏦 입출금','적금':'💰 적금','청약':'🏠 청약','CMA':'📈 CMA','예금':'🏛 예금',card:'💳 카드',cash:'💵 현금',other:'📌 기타'};
 
 function renderAccounts(){
-  const el = document.getElementById('acct-list');
+  var el=document.getElementById('acct-view');
   if(!el) return;
-  const rate = usdRate||1390;
-  if(!DB.accounts||!DB.accounts.length){
-    el.innerHTML='<div style="padding:16px;text-align:center;color:var(--t2);font-size:12px">+ 계좌 추가로 자산 현황을 기록해보세요</div>';
-    return;
-  }
-  const total = DB.accounts.reduce((s,a)=>s+(a.currency==='USD'?a.bal*rate:a.bal),0);
-  const mjTotal = DB.accounts.filter(a=>a.person==='mj').reduce((s,a)=>s+(a.currency==='USD'?a.bal*rate:a.bal),0);
-  const jwTotal = DB.accounts.filter(a=>a.person==='jw').reduce((s,a)=>s+(a.currency==='USD'?a.bal*rate:a.bal),0);
-  // Update cash total display
-  const cashTotalEl = document.getElementById('asset-cash-total');
-  if(cashTotalEl) cashTotalEl.textContent = total ? fw(total) : '계좌를 추가해보세요';
+  var rate=usdRate||1390;
+  var accounts=DB.accounts||[];
+  if(!accounts.length){el.innerHTML='<div class="empty-state">계좌가 없어요</div>';return;}
 
-  el.innerHTML = `
-    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px">
-      <div style="background:var(--s2);border-radius:8px;padding:10px 12px">
-        <div style="font-size:10px;color:var(--t2);margin-bottom:4px">민정 계좌</div>
-        <div style="font-size:16px;font-weight:700;font-family:var(--mn);color:var(--mj)">${fs(mjTotal)}</div>
-      </div>
-      <div style="background:var(--s2);border-radius:8px;padding:10px 12px">
-        <div style="font-size:10px;color:var(--t2);margin-bottom:4px">진우 계좌</div>
-        <div style="font-size:16px;font-weight:700;font-family:var(--mn);color:var(--jw)">${fs(jwTotal)}</div>
-      </div>
-      <div style="background:var(--s2);border-radius:8px;padding:10px 12px;border:1px solid rgba(93,202,165,.3)">
-        <div style="font-size:10px;color:var(--t2);margin-bottom:4px">합계</div>
-        <div style="font-size:16px;font-weight:700;font-family:var(--mn);color:var(--gr)">${fs(total)}</div>
-      </div>
-    </div>
-    <table class="tbl">
-      <thead><tr><th>계좌명</th><th>종류</th><th>명의</th><th class="num">잔액</th><th>메모</th><th></th></tr></thead>
-      <tbody>
-      ${DB.accounts.map(a=>{
-        const krw = a.currency==='USD'?a.bal*rate:a.bal;
-        return `<tr>
-          <td style="font-weight:500;font-size:12px">${a.name}</td>
-          <td style="font-size:11px;color:var(--t2)">${ACCT_TYPES[a.type]||a.type}</td>
-          <td><span class="tag t-${a.person==='both'?'dm':a.person}">${a.person==='mj'?'민정':a.person==='jw'?'진우':'공동'}</span></td>
-          <td class="num" style="font-weight:500">
-            ${a.currency==='USD'?`<span style="color:var(--bl);font-size:10px">$${a.bal.toLocaleString()}</span><br>`:''}
-            ${fw(krw)}
-          </td>
-          <td style="font-size:11px;color:var(--t3)">${a.memo||''}</td>
-          <td>
-            <button class="del" onclick="editAcct('${a.id}')">✎</button>
-            <button class="del" onclick="delAcct('${a.id}')">✕</button>
-          </td>
-        </tr>`;
-      }).join('')}
-      </tbody>
-    </table>
-    <div style="margin-top:8px;font-size:10px;color:var(--t3)">※ 잔액은 수동 입력. 정확한 현황은 직접 업데이트하세요.</div>`;
+  var tid='acct-body';
+  var sorted=sortItems(accounts.slice().map(function(a){
+    a._val=a.currency==='USD'?a.bal*rate:a.bal; return a;
+  }), tid);
+
+  var typeEmoji={saving:'💰',checking:'🏦',investment:'📈',other:'📌',
+    입출금:'🏦',적금:'💰',예금:'🏦',CMA:'📊',청약:'🏠',pension:'🏛',other:'📌'};
+  var rows=sorted.map(function(a){
+    var krw=a.currency==='USD'?Math.round(a.bal*rate):a.bal;
+    return '<tr>'
+      +'<td>'+( a.name||'')+(a.maturity?'<div style="font-size:10px;color:var(--t3)">'+a.maturity+' 해지 가능</div>':'')+'</td>'
+      +'<td><span style="font-size:11px">'+(typeEmoji[a.type]||'📌')+' '+(a.type||'')+'</span></td>'
+      +'<td><span class="tag t-'+(a.person==='both'?'dm':a.person)+'">'+(a.person==='mj'?'민정':a.person==='jw'?'진우':'공동')+'</span></td>'
+      +'<td class="num" style="color:var(--gr)">'+fw(krw)+'</td>'
+      +'<td style="font-size:11px;color:var(--t3)">'+(a.memo||'')+'</td>'
+      +'<td style="white-space:nowrap">'
+      +'<button class="del" style="margin-right:2px" onclick="openAcctModal(\''+a.id+'\')">✎</button>'
+      +'<button class="del" onclick="delAcct(\''+a.id+'\')">✕</button>'
+      +'</td></tr>';
+  }).join('');
+
+  var total=accounts.reduce(function(s,a){return s+(a.currency==='USD'?a.bal*rate:a.bal);},0);
+  el.innerHTML='<table class="tbl"><thead id="acct-thead"><tr>'
+    +sh(tid,'name','계좌명')+sh(tid,'type','종류')+sh(tid,'person','명의')
+    +sh(tid,'val','잔액')+'<th>메모</th><th></th>'
+    +'</tr></thead><tbody id="'+tid+'">'+rows+'</tbody></table>'
+    +'<div class="hr"></div>'
+    +'<div class="fb"><span style="font-size:12px;color:var(--t2)">합계</span>'
+    +'<span style="font-family:var(--mn);font-weight:500;color:var(--gr)">'+fw(Math.round(total))+'</span></div>';
 }
+
 
 function openAcctModal(id){
   document.getElementById('acct-modal-title').textContent = id ? '계좌 수정' : '계좌 추가';
@@ -3375,8 +3462,21 @@ function renderAnnualChart(data){
     return '<div style="flex:1;text-align:center;font-size:9px;color:var(--t3);margin-top:4px">'+(i+1)+'월</div>';
   }).join('');
 
-  el.innerHTML='<div style="display:flex;align-items:flex-end;gap:3px;height:180px;padding:8px 4px 0;border-bottom:1px solid var(--bd)">'+bars+'</div>'
+  // Y축 눈금 라벨 (최대값 기준 4단계)
+  var yMaxLabel = maxAnn >= 10000000 ? Math.round(maxAnn/10000)+'만' : Math.round(maxAnn/10000)+'만';
+  var yMidLabel = Math.round(maxAnn/20000)+'만';
+  var yAxisHtml = '<div style="display:flex;flex-direction:column;justify-content:space-between;height:180px;padding:8px 0 0;margin-right:4px;text-align:right;font-size:9px;color:var(--t3);min-width:30px">'
+    +'<span>'+yMaxLabel+'</span>'
+    +'<span>'+yMidLabel+'</span>'
+    +'<span style="margin-bottom:1px">0</span>'
+    +'</div>';
+
+  el.innerHTML='<div style="display:flex;align-items:flex-start">'
+    +yAxisHtml
+    +'<div style="flex:1">'
+    +'<div style="display:flex;align-items:flex-end;gap:3px;height:180px;padding:8px 4px 0;border-bottom:1px solid var(--bd);border-left:1px solid var(--bd)">'+bars+'</div>'
     +'<div style="display:flex;gap:3px;padding:0 4px">'+labels+'</div>'
+    +'</div></div>'
     +'<div style="display:flex;gap:14px;justify-content:center;margin-top:8px;font-size:10px">'
     +'<span><span style="display:inline-block;width:10px;height:10px;background:var(--gr);border-radius:2px;opacity:.7;margin-right:3px"></span>수입</span>'
     +'<span><span style="display:inline-block;width:10px;height:10px;background:var(--rd);border-radius:2px;opacity:.75;margin-right:3px"></span>지출</span>'
@@ -5563,6 +5663,43 @@ function applySortTxns(txns, tableId){
     const cmp = typeof va==='number' ? va-vb : va.localeCompare(vb,'ko');
     return s.dir==='asc' ? cmp : -cmp;
   });
+}
+
+
+function sortItems(items, tableId){
+  var s = sortState[tableId];
+  if(!s || !items || !items.length) return items;
+  return items.slice().sort(function(a,b){
+    var va, vb;
+    switch(s.col){
+      case 'name':   va=a.name||''; vb=b.name||''; break;
+      case 'person': va=a.person||''; vb=b.person||''; break;
+      case 'type':   va=a.type||''; vb=b.type||''; break;
+      case 'cat':    va=a.cat||''; vb=b.cat||''; break;
+      case 'bal':    va=a.bal||0; vb=b.bal||0; break;
+      case 'amt':    va=a.amt||0; vb=b.amt||0; break;
+      case 'qty':    va=a.qty||0; vb=b.qty||0; break;
+      case 'val':    va=a._val||0; vb=b._val||0; break;
+      case 'monthly': va=a.monthly||0; vb=b.monthly||0; break;
+      case 'day':    va=a.day||0; vb=b.day||0; break;
+      case 'ticker': va=a.ticker||''; vb=b.ticker||''; break;
+      case 'date':   va=a.date||''; vb=b.date||''; break;
+      case 'amount': va=a.amount||0; vb=b.amount||0; break;
+      default: va=a[s.col]||''; vb=b[s.col]||'';
+    }
+    if(typeof va==='string') return s.dir==='asc'?va.localeCompare(vb):vb.localeCompare(va);
+    return s.dir==='asc'?va-vb:vb-va;
+  });
+}
+
+// 정렬 헤더 아이콘 생성
+function sh(tableId, col, label){
+  var s=sortState[tableId];
+  var active=s&&s.col===col;
+  var icon=active?(s.dir==='asc'?'↑':'↓'):'⇅';
+  var color=active?(s.dir==='asc'?'var(--gr)':'var(--ac)'):'var(--t3)';
+  return '<th onclick="sortTable(\''+tableId+'\',\''+col+'\')" style="cursor:pointer;user-select:none">'
+    +label+' <span style="color:'+color+';font-size:10px">'+icon+'</span></th>';
 }
 
 function applySortFixed(items, tableId){
