@@ -5617,18 +5617,30 @@ function doSort(tableId, col, el){
   sortTable(tableId, col);
 }
 function sortTable(tableId, col){
-  const prev = sortState[tableId];
-  const dir = (prev?.col===col && prev?.dir==='asc') ? 'desc' : 'asc';
-  sortState[tableId] = {col, dir};
-  // Re-render the page that owns this table
-  const tableEl = document.getElementById(tableId);
-  if(!tableEl) return;
-  const pg = tableEl.closest('.pg')?.id?.replace('pg-','');
-  if(pg==='txn') renderTxn();
-  else if(pg==='fixed') renderFixed();
-  else if(pg==='income') renderIncome();
-  else if(pg==='asset') renderAsset();
-  else if(pg==='settle') renderSettle();
+  var prev = sortState[tableId];
+  var dir = (prev && prev.col===col && prev.dir==='asc') ? 'desc' : 'asc';
+  sortState[tableId] = {col:col, dir:dir};
+  // tableId로 직접 렌더 함수 결정 (closest 불필요)
+  if(tableId==='txn-body') renderTxn();
+  else if(tableId==='income-body') renderIncome();
+  else if(tableId==='fixed-body') renderFixed();
+  else if(tableId==='inv-body') renderInv();
+  else if(tableId==='acct-body') renderAccounts();
+  else if(tableId==='pension-body') renderPension();
+  else if(tableId==='settle-top') renderSettle();
+  else if(tableId==='fixed-chart-body') renderFixedCharts();
+  else {
+    // fallback: closest 시도
+    var tableEl = document.getElementById(tableId);
+    if(!tableEl) return;
+    var pg = tableEl.closest && tableEl.closest('.pg');
+    var pgId = pg ? pg.id.replace('pg-','') : '';
+    if(pgId==='txn') renderTxn();
+    else if(pgId==='fixed') renderFixed();
+    else if(pgId==='income') renderIncome();
+    else if(pgId==='asset') renderAsset();
+    else if(pgId==='settle') renderSettle();
+  }
 }
 
 function sortIcon(tableId, col){
